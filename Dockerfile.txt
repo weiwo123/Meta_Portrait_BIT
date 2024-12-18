@@ -1,0 +1,64 @@
+FROM nvidia/cuda:11.6.1-runtime-ubuntu20.04 AS builder
+
+# 设置环境变量
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PATH=/root/anaconda3/bin:$PATH
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y \
+    wget \
+    git \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Miniconda
+RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /miniconda.sh && \
+    bash /miniconda.sh -b -p /root/anaconda3 && \
+    rm /miniconda.sh && \
+    /root/anaconda3/bin/conda clean -a -y
+
+# 初始化conda并添加到PATH
+RUN conda init bash && \
+    echo "conda activate meta_portrait_base" >> ~/.bashrc
+
+# 创建工作目录
+WORKDIR /app
+
+# 复制 environment.yml 并创建 Conda 环境
+COPY environment.yml .
+RUN conda env create -f environment.yml && \
+    conda clean -a -y
+
+# 激活环境
+SHELL ["conda", "run", "-n", "meta_portrait_base", "/bin/bash", "-c"]
+
+# 安装额外的依赖
+WORKDIR /app/sr_model
+COPY sr_model/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 安装 BasicSR 和 facexlib
+WORKDIR /app/sr_model/Basicsr
+COPY sr_model/Basicsr/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && \
+    python setup.py develop && \
+    pip install --no-cache-dir facexlib
+
+# 复制项目文件
+WORKDIR /app
+COPY . .
+
+# 下载资源
+RUN wget --no-check-certificate -O base_model/checkpoint/ckpt_base.pth.tar "https://github.com/Meta-Portrait/MetaPortrait/releases/download/v0.0.1/temporal_gfpgan.pth" && \
+    wget --no-check-certificate -O sr_model/pretrained_ckpt/temporal_gfpgan.pth "https://github.com/Meta-Portrait/MetaPortrait/releases/download/v0.0.1/temporal_gfpgan.pth"
+
+# 设置入口点脚本
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
